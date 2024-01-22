@@ -1,0 +1,78 @@
+# -*- mode: ruby -*-
+# vim: set ft=ruby :
+
+MACHINES = {
+:server => {
+        :box_name => "centos/8",
+        :net => [
+                   {ip: '192.168.56.10', adapter: 2, netmask: "255.255.255.0", virtualbox__intnet: "vpn-net"},
+                ]
+  },
+:client => {
+
+        :box_name => "centos/8",
+        :net => [
+                   {ip: '192.168.56.11', adapter: 2, netmask: "255.255.255.0", virtualbox__intnet: "vpn-net"},
+                ]
+  },
+}
+
+Vagrant.configure("2") do |config|
+
+  MACHINES.each do |boxname, boxconfig|
+    config.vm.synced_folder "./", "/vagrant"
+    config.vm.define boxname do |box|
+
+        box.vm.provider :virtualbox do |vb|
+          vb.customize ["modifyvm", :id, "--memory", "512"]
+        end
+
+        box.vm.box = boxconfig[:box_name]
+        box.vm.host_name = boxname.to_s
+
+        boxconfig[:net].each do |ipconf|
+          box.vm.network "private_network", ipconf
+        end
+
+        box.vm.provision "shell", inline: <<-SHELL
+          mkdir -p ~root/.ssh
+                cp ~vagrant/.ssh/auth* ~root/.ssh
+        SHELL
+
+        case boxname.to_s
+        when "server"
+          box.vm.provision "shell", run: "always", inline: <<-SHELL
+          cd /etc/yum.repos.d/
+          sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+          sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+          
+	  sudo dnf install epel-release -y
+	  sudo dnf install openvpn -y 
+	  sudo dnf install iperf3 -y
+          sudo setenforce 0
+          cp /vagrant/static.key /etc/openvpn/static.key
+          cp /vagrant/server.conf /etc/openvpn/server.conf
+       	openvpn --config /etc/openvpn/server.conf &  
+	iperf3 -s &
+            SHELL
+        when "client"
+          box.vm.provision "shell", run: "always", inline: <<-SHELL
+	  cd /etc/yum.repos.d/
+	 sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+          sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+
+          sudo dnf install epel-release -y
+          sudo dnf install openvpn -y
+          sudo dnf install iperf3 -y
+          sudo setenforce 0
+       	  cp /vagrant/client.conf /etc/openvpn/client.conf        
+	cp /vagrant/static.key /etc/openvpn/static.key
+	openvpn --config /etc/openvpn/client.conf &
+	iperf3 -c 10.10.10.1 -t 40 -i 5 >> /var/tap.log	
+    SHELL
+        end
+      end
+
+  end
+
+end

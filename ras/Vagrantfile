@@ -1,0 +1,84 @@
+# -*- mode: ruby -*-
+# vim: set ft=ruby :
+
+MACHINES = {
+:server => {
+        :box_name => "centos/8",
+        :net => [
+                   {ip: '192.168.56.10', adapter: 2, netmask: "255.255.255.0"},
+                ]
+  },
+}
+
+Vagrant.configure("2") do |config|
+
+  MACHINES.each do |boxname, boxconfig|
+    config.vm.synced_folder "./", "/vagrant"
+   	   
+     config.vm.define boxname do |box|
+
+        box.vm.provider :virtualbox do |vb|
+          vb.customize ["modifyvm", :id, "--memory", "512"]
+        end
+
+        box.vm.box = boxconfig[:box_name]
+        box.vm.host_name = boxname.to_s
+
+        boxconfig[:net].each do |ipconf|
+          box.vm.network "private_network", ipconf
+        end
+
+        box.vm.provision "shell", inline: <<-SHELL
+          mkdir -p ~root/.ssh
+                cp ~vagrant/.ssh/auth* ~root/.ssh
+        SHELL
+
+        case boxname.to_s
+        when "server"
+          box.vm.provision "shell", run: "always", inline: <<-SHELL
+          cd /etc/yum.repos.d/
+          sudo sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+          sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+	  sudo dnf install epel-release -y
+	  sudo yum install openvpn -y 
+	sudo dnf install easy-rsa -y  
+          sudo setenforce 0
+	cd /etc/openvpn/
+mkdir easy-rsa
+cd /usr/share/easy-rsa/3.0.8
+cp -rf * /etc/openvpn/easy-rsa/
+cd /etc/openvpn/easy-rsa/
+./easyrsa init-pki
+echo 'rasvpn' | ./easyrsa build-ca nopass
+./easyrsa gen-dh
+echo 'rasvpn' | ./easyrsa gen-req server nopass
+echo 'yes' | ./easyrsa sign-req server server
+
+mkdir /etc/openvpn/keys/
+chmod 750 /etc/openvpn/keys
+sudo cp -a /etc/openvpn/easy-rsa/pki/ca.crt /etc/openvpn/keys/
+sudo cp -a /etc/openvpn/easy-rsa/pki/dh.pem /etc/openvpn/keys/dh2048.pem
+sudo cp -a /etc/openvpn/easy-rsa/pki/issued/server.crt /etc/openvpn/keys/
+sudo cp -a /etc/openvpn/easy-rsa/pki/private/server.key /etc/openvpn/keys/
+
+cd /etc/openvpn/easy-rsa
+sudo echo 'client' | ./easyrsa gen-req client nopass
+sudo echo 'yes' | ./easyrsa sign-req client client
+sudo cp -a /etc/openvpn/easy-rsa/pki/issued/client.crt /etc/openvpn/keys/
+sudo cp -a /etc/openvpn/easy-rsa/pki/private/client.key /etc/openvpn/keys/
+sudo cp /vagrant/server.conf /etc/openvpn/server.conf
+echo 'iroute 10.10.10.0 255.255.255.0' > /etc/openvpn/client/client
+cp /etc/openvpn/keys/ca.crt /opt/ca.crt
+cp /etc/openvpn/keys/client.crt /opt/client.crt
+cp /etc/openvpn/keys/client.key /opt/client.key
+cp /etc/openvpn/keys/dh2048.pem /opt/dh2048.pem
+chmod -R 0777 /opt/
+
+
+SHELL
+        end
+      end
+
+  end
+
+end
